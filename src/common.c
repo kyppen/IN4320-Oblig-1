@@ -6,11 +6,12 @@
 #include <stdint.h>
 #include <sys/socket.h>	/* socket */
 
-#include "common.h"
+#include "../common.h"
 
 /*
  * Print MAC address in hex format
  */
+
 void print_mac_addr(uint8_t *addr, size_t len)
 {
 	size_t i;
@@ -21,6 +22,7 @@ void print_mac_addr(uint8_t *addr, size_t len)
 	printf("%02x\n", addr[i]);
 }
 
+void send_arp_request()
 /*
  * This function stores struct sockaddr_ll addresses for all interfaces of the
  * node (except loopback interface)
