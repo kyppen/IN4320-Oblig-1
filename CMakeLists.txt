@@ -16,4 +16,5 @@ add_executable(IN4230_Oblig1
         src/linked_list.c
         src/linked_list.h
         src/ether.h
-        src/pdu.h)
+        src/pdu.h
+        src/pdu.c)

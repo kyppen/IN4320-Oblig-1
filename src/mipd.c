@@ -22,10 +22,6 @@ int main(int argc, char *argv[]) {
     struct epoll_event ev, events[MAX_EVENTS];
     int epollfd;
 
-    struct mip_header head;
-
-    head.len = ETH_HLEN;
-
     if (argc == 5) {
         printf("right amount of arguments passed");
         printf("%s\n", argv[1]);
@@ -54,30 +50,31 @@ int main(int argc, char *argv[]) {
     }
 
 
-    struct mip_hdr h1 = { 5, 42, 7, 255, 1};
-    uint32_t raw = mip_pack(&h1);
+    //struct mip_hdr h1 = { 0x10, 0x20, 7, 255, 1};
+    //uint32_t raw = mip_pack(&h1);
 
-    printf("Packed 0x%08X\n", ntohl(raw));
+    //printf("Packed 0x%08X\n", ntohl(raw));
 
-    struct mip_hdr h2;
-    mip_unpack(raw, &h2);
-    printf("Unpacked: dest=%u, src=%u, ttl=%u, len=%u, sdu=%u\n",
-        h2.dst_addr, h2.src_addr, h2.ttl, h2.len, h2.SDU_type);
 
     uint8_t src_mac[6] = {0x02,0x00,0x00,0x00,0x00,0x01};
     uint8_t dst_mac[6] = {0x02,0x00,0x00,0x00,0x00,0x02};
 
-    //trouble starts here
+    //TESTING SERIALIZATION AND DESERIALIZATION
     struct pdu *p = pdu_alloc();
     fill_pdu(p, src_mac, dst_mac,
-             /*src*/0x01, /*dst*/0x05,
-             /*ttl*/1,
-             /*type*/MIP_SDU_PING,
+             0x10, 0x20,
+             1,
+             MIP_SDU_TYPE_PING,
              "PING:hello");
 
 
+    uint8_t buf[1500];
+    size_t len = mip_serialize_pdu(p, buf);
 
-
+    struct pdu q = {0};
+    mip_deserialize_pdu(&q, buf);
+    print_pdu_content(&q);
+    // TESTING END
 
     for (int i = 0; i < local_ifs.ifn; i++) {
         print_mac_addr(local_ifs.addr[i].sll_addr, 6);
@@ -86,7 +83,14 @@ int main(int argc, char *argv[]) {
     printf("\n<%s> Hi! I am %s with MAC ", argv[0], argv[0]);
     print_mac_addr(local_ifs.addr[0].sll_addr, 6);
 
-    send_arp_request(&local_ifs);
+    send_mip_packet(&local_ifs,src_mac, dst_mac,
+             0x10, 0x20,
+             1,
+             MIP_SDU_TYPE_PING,
+             "PING:hello");
+
+    printf("Send mip packet atleast didnt fail?");
+    //send_arp_request(&local_ifs);
     /* epoll_wait forever for incoming packets */
     while(1) {
         rc = epoll_wait(epollfd, events, MAX_EVENTS, -1); //wait for data to appear on the socket
@@ -95,7 +99,8 @@ int main(int argc, char *argv[]) {
             break;
         } else if (events->data.fd == raw_sock) {
             printf("\n<info> The neighbor is initiating a handshake\n");
-            rc = handle_arp_packet(&local_ifs);
+            //rc = handle_arp_packet(&local_ifs);
+            rc = handle_mip_packet(&local_ifs, "Hello there");
             if (rc < 1) {
                 perror("recv");
                 break;

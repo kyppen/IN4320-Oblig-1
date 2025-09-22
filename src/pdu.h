@@ -1,10 +1,14 @@
 #ifndef PDU_H
 #define PDU_H
 
+#define MAX_BUF_SIZE	1024
+
 #include <stdint.h>
 #include <stddef.h>
 #include "ether.h"
 #include "mip.h"
+
+
 
 struct pdu {
     struct eth_hdr *ethhdr;
@@ -17,8 +21,8 @@ struct pdu * pdu_alloc(void);
 void fill_pdu(struct pdu *pdu,
     uint8_t *src_mac_addr,
     uint8_t *dst_mac_addr,
-    uint8_t src_ip_addr,
-    uint8_t dst_ip_addr,
+    uint8_t src_mip_addr,
+    uint8_t dst_mip_addr,
     uint8_t ttl_4bit,
     uint8_t sdu_type,
     const char *sdu_ascii

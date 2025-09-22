@@ -1,11 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ifaddrs.h>		/* getifaddrs */
+#include <ifaddrs.h> /* getifaddrs */
 #include <arpa/inet.h>		/* htons */
 #include <stdint.h>
 #include <sys/socket.h>	/* socket */
-
+#include <assert.h>
 #include "common.h"
 #include "mip.h"
 #include "pdu.h"
@@ -238,147 +238,60 @@ int send_arp_response(struct ifs_data *ifs, struct sockaddr_ll *so_name,
 
 	return rc;
 }
+int send_mip_packet(struct ifs_data *ifs,
+					uint8_t *src_mac_addr,
+					uint8_t *dst_mac_addr,
+					uint8_t src_mip_addr,
+					uint8_t dst_mip_addr,
+					uint8_t ttl_4bit,
+					uint8_t sdu_type,
+					const char *sdu_ascii) {
+	struct pdu *pdu = pdu_alloc();
+	uint8_t send_buffer[MAX_BUF_SIZE];
 
-uint32_t mip_pack(struct mip_hdr *header) {
-	uint32_t packed = 0;
-	packed |= ((uint32_t)(header->dst_addr & 0xFF)) << 24;
-	packed |= ((uint32_t)(header->src_addr & 0xFF)) << 16;
-	packed |= ((uint32_t)(header->ttl & 0x0F)) << 12;
-	packed |= ((uint32_t)(header->len & 0x1FF)) << 3;
-	packed |= (uint32_t)(header->SDU_type & 0x01);
-
-	return htonl(packed); // Convert struct to network byte order
-}
-
-void mip_unpack(uint32_t raw, struct mip_hdr *header) {
-	uint32_t unpacked = ntohl(raw);
-
-	header->dst_addr = (unpacked >> 24) & 0xFF;
-	header->src_addr = (unpacked >> 16) & 0xFF;
-	header->ttl = (unpacked >> 12) & 0x0F;
-	header->len = (unpacked >> 3) & 0x1FF;
-	header->SDU_type = unpacked & 0x01;
-}
-
-struct pdu * pdu_alloc(void) {
-	struct pdu *pdu = (struct pdu *)calloc(1, sizeof(struct pdu));
-	if (!pdu) return NULL;
-	pdu->ethhdr = (struct eth_hdr*)calloc(1, sizeof(struct eth_hdr));
-	pdu->miphdr = (struct mip_hdr*)calloc(1, sizeof(struct mip_hdr));
-
-	if (!pdu->miphdr || !pdu->ethhdr) {
-		destroy_pdu(pdu);
-		return NULL;
+	if (pdu == NULL) {
+		printf("pdu == NULL?\n");
 	}
 
-	//Setting some default values incase
-	pdu->ethhdr->ether_type = htons(ETH_P_MIP);
-	pdu->miphdr->dst_addr = 0;
-	pdu->miphdr->src_addr = 0;
-	pdu->miphdr->ttl = 1; // default to once to avoid Broadcast storm. Will be overwritten anyways
-	pdu->miphdr->len = 0;
-	pdu->miphdr->SDU_type = MIP_SDU_PING;
-}
+	fill_pdu(pdu, src_mac_addr, dst_mac_addr, src_mip_addr, dst_mip_addr, ttl_4bit, sdu_type, sdu_ascii);
 
-void destroy_pdu(struct pdu *pdu) {
-	free(pdu->ethhdr);
-	free(pdu->miphdr);
-	free(pdu->sdu);
-	//free(pdu);
-}
-
-void fill_pdu(struct pdu *pdu,
-	uint8_t *src_mac_addr,
-	uint8_t *dst_mac_addr,
-	uint8_t src_mip_addr,
-	uint8_t dst_mip_addr,
-	uint8_t ttl_4bit,
-	uint8_t sdu_type,
-	const char *sdu_ascii)
-{
-	memcpy(pdu->ethhdr->src_mac, src_mac_addr, 6);
-	memcpy(pdu->ethhdr->dst_mac, dst_mac_addr, 6);
-	pdu->ethhdr->ether_type = htons(ETH_P_MIP);
-
-	pdu->miphdr->dst_addr = dst_mip_addr;
-	pdu->miphdr->src_addr = src_mip_addr;
-	pdu->miphdr->ttl = ttl_4bit & 0x0F; // 4 bits
-	pdu->miphdr->SDU_type = sdu_type & 0x07; // 9 bits
-
-	size_t slen = (sdu_ascii ? (strlen(sdu_ascii) - 1) : 0);
-	size_t padded = slen * 4;
-
-	if (padded > 0) { // if padded is more then 0 we need to allocate
-		pdu->sdu = calloc(1, padded);
-		if (sdu_ascii && slen) {
-			memcpy(pdu->sdu, sdu_ascii, slen);
-		}
-
-	} else {
-		pdu->sdu = NULL;
+	size_t send_len = mip_serialize_pdu(pdu, send_buffer);
+	printf("send_buffer %lu\n", send_len);
+	printf("typeof if %d\n");
+	if (sendto(ifs->rsock, send_buffer, send_len, 0, (struct sockaddr *) &(ifs->addr[0]), sizeof(ifs->addr[0]) ) <= 0) {
+		perror(("sendto() failed"));
+		close(ifs->rsock);
 	}
-	pdu->miphdr->len = padded / 4;
+	printf("Sending PDU with content (size %zu):\n", send_len);
+	print_pdu_content(pdu);
+	destroy_pdu(pdu);
+
+	return 0;
 }
-
-size_t mip_serialize_pdu(const struct pdu *pdu, uint8_t *send_buffer) {
-	size_t send_len = 0;
-
-	memcpy(send_buffer + send_len, pdu->ethhdr, 6);
-	send_len += ETH_HDR_LEN;
-
-	uint32_t net_mip = mip_pack(pdu->miphdr);
-	memcpy(send_buffer + send_len, &net_mip, 4);
-	send_len += 4;
-
-	size_t sdu_bytes = pdu->miphdr->len * 4;
-	if (sdu_bytes && pdu->sdu) {
-		memcpy(send_buffer + send_len, pdu->sdu, sdu_bytes);
-		send_len += sdu_bytes;
+int handle_mip_packet(struct ifs_data *ifs, const char *app_mode) {
+	struct pdu *pdu = (struct pdu *)malloc(sizeof(struct pdu));
+	if (NULL == pdu) {
+		perror("malloc");
+		return -1;
 	}
-	return send_len;
-}
 
-size_t mip_deserialize_pdu(struct pdu *pdu, uint8_t *recv_buffer) {
-	size_t recv_len = 0;
-
-	pdu->ethhdr = malloc(sizeof(struct eth_hdr));
-	memcpy(pdu->ethhdr, recv_buffer + recv_len, ETH_HDR_LEN);
-	recv_len += ETH_HDR_LEN;
-
-	pdu->miphdr = malloc(sizeof(struct mip_hdr));
-	uint32_t net_mip = 0;
-	memcpy(pdu->miphdr, recv_buffer + recv_len, ETH_HDR_LEN);
-	mip_unpack(net_mip, pdu->miphdr);
-	recv_len += ETH_HDR_LEN;
-
-	size_t sdu_bytes = pdu->miphdr->len * 4;
-	if (sdu_bytes > 0) {
-		pdu->sdu = calloc(1, sdu_bytes);
-		memcpy(pdu->sdu, recv_buffer + recv_len, sdu_bytes);
-		recv_len += sdu_bytes;
-	} else {
-		pdu->sdu = NULL;
+	uint8_t rcv_buf[MAX_BUF_SIZE];
+	if (recvfrom(ifs->rsock, rcv_buf, MAX_BUF_SIZE, 0, NULL, NULL) <= 0) {
+		perror("recvfrom()");
+		close(ifs->rsock);
 	}
-	return recv_len;
-}
-void print_pdu_content(const struct pdu *pdu)
-{
-	printf("====================================================\n");
-	printf("\tSource MAC:      "); print_mac_addr(pdu->ethhdr->src_mac, ETH_ADDR_LEN);
-	printf("\tDestination MAC: "); print_mac_addr(pdu->ethhdr->dst_mac, ETH_ADDR_LEN);
 
-	printf("\tEthertype:       0x%04x\n", ntohs(pdu->ethhdr->ether_type));
-	printf("\tMIP src:         %u\n", pdu->miphdr->src_addr);
-	printf("\tMIP dst:         %u\n", pdu->miphdr->dst_addr);
-	printf("\tTTL:   struct pdu * alloc_pdu(void);          %u\n", pdu->miphdr->ttl & 0x0F);
-	printf("\tSDU type:        0x%02x\n", pdu->miphdr->SDU_type & 0x07);
-	printf("\tSDU length:      %u bytes\n", (unsigned)(pdu->miphdr->len * 4));
+	size_t rcv_len = mip_deserialize_pdu(pdu, rcv_buf);
+	printf("Recieved PDU with content (size %zu) :\n", rcv_len);
+	print_pdu_content(pdu);
+	//maybe more
 
-	if (pdu->sdu) {
-		printf("\tSDU (ascii):     %s\n", (const char*)pdu->sdu);
-	}
-	printf("====================================================\n");
+	return 0;
+
+
 }
+
+
 
 
 
